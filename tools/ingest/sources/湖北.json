@@ -1,0 +1,19 @@
+{
+  "省份": "湖北",
+  "_说明": "真实形态示例。primary_url/mirror_urls 须为官方域；column_map 由 LLM 辅助生成后人复核、确定性复用。自测不读本文件（见 selfcheck.py 内联夹具）。",
+  "datasets": [
+    {
+      "dataset": "一分一段表",
+      "year": 2026,
+      "format": "html_table",
+      "publisher": "湖北省教育考试院",
+      "primary_url": "https://www.hbea.edu.cn/html/2026-06/示例公告.html",
+      "mirror_urls": ["https://hbsjyt.gov.cn/示例镜像.html"],
+      "table_selector": { "index": 1 },
+      "skip_rows": 1,
+      "column_map": { "分数": 0, "本段人数": 1, "累计人数": 2 },
+      "const_cols": { "科类": "物理类" },
+      "discovery": { "query": "湖北 2026 物理类 一分一段表 考试院", "allow_domains": ["hbea.edu.cn"] }
+    }
+  ]
+}

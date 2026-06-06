@@ -1,0 +1,43 @@
+# ── 官方数据原件（不随仓库分发）─────────────────────────
+# data/_raw/ 是从考试院/教育部抓来的官方 PDF/Excel/ZIP 原件（约 14MB），
+# 再分发受各来源使用条款约束，且可由 tools/ingest/fetch.py 重新抓取。
+# 清洗后的 CSV（data/provinces/、data/disciplines/ 等）已带 source_url + raw_hash，
+# 点级可回溯，无需原件即可审计——故原件不入库。
+data/_raw/
+
+# ── 生成的答案（运行产物，非源码）──────────────────────
+# output/ 下是脚本生成的志愿答案 demo（每份可达数百KB），按需现生成即可。
+# 保留 README 说明其用途；如需留样例，手动 `git add -f output/某文件.md`。
+output/*
+!output/README.md
+
+# ── Python ─────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+
+# ── 虚拟环境 ───────────────────────────────────────────
+.venv/
+venv/
+env/
+
+# ── 编辑器 / 操作系统 ──────────────────────────────────
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# ── 临时文件 ───────────────────────────────────────────
+/tmp/
+*.tmp
+*.log
+
+# 注：lib/_selfcheck_data/ 与 tools/ingest/_selfcheck_data/ 是自检夹具，
+# 必须随仓库一起发布，不要忽略。
