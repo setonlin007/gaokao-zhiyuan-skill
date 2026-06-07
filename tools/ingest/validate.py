@@ -58,21 +58,31 @@ def validate_yifenyiduan(rows, total=None):
 
 
 def validate_min_ranks(rows, total=None):
-    """投档单位最低位次：0<位次≤总人数；最低分在域内。"""
+    """投档单位最低位次：0<位次≤总人数；最低分（若有）在域内。
+
+    最低分可选：部分省（如山东）官方投档表【只公布最低位次、不公布最低分】，
+    这类行 最低分 留空，跳过分数域校验，仅校验位次（位次本就是分档基准量）。
+    """
     errs = []
     if not rows:
         return False, ["空表"]
     for i, r in enumerate(rows):
         try:
             rank = _as_int(r["最低位次"])
-            score = _as_int(r["最低分"])
         except (KeyError, ValueError) as e:
-            errs.append(f"第{i}行数值脏：{r}（{e}）")
+            errs.append(f"第{i}行位次脏：{r}（{e}）")
             continue
         if rank <= 0 or (total is not None and rank > total):
             errs.append(f"第{i}行位次越界：{rank}（总人数{total}）")
-        if not (SCORE_MIN <= score <= SCORE_MAX):
-            errs.append(f"第{i}行最低分越界：{score}")
+        raw_score = str(r.get("最低分", "")).strip()
+        if raw_score != "":   # 有分才校验域；山东只给位次→留空跳过
+            try:
+                score = _as_int(raw_score)
+            except ValueError as e:
+                errs.append(f"第{i}行最低分脏：{r}（{e}）")
+                continue
+            if not (SCORE_MIN <= score <= SCORE_MAX):
+                errs.append(f"第{i}行最低分越界：{score}")
     return (not errs), errs
 
 

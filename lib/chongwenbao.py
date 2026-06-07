@@ -39,6 +39,7 @@ def aggregate_units(min_rank_rows, recent_years=config.RECENT_YEARS):
             "投档单位id": uid,
             "院校名": latest.get("院校名", ""),
             "专业组代码": latest.get("专业组代码", ""),
+            "专业名": latest.get("专业名", ""),      # 专业(类)平行志愿省（山东等）展示用
             "基准位次": base,                       # 最新年位次（不跨年均值）
             "基准年": latest["year"],
             "r_band": (min(stable), max(stable)),   # 仅含稳定(同组可信)年份
@@ -162,7 +163,8 @@ def apply_static_filters(units, city_pref=None, accept_minban=None):
 
 def rank_candidates(rank, eligible_units, min_rank_rows, plan_rows,
                     volunteer_slots=None, unit_grain="院校专业组",
-                    city_pref=None, accept_minban=None, school_xk_index=None):
+                    city_pref=None, accept_minban=None, school_xk_index=None,
+                    volunteer_mode="院校专业组", unit_xk_index=None):
     """主入口。
 
     rank: 考生位次（已由 rank.py 换算）。
@@ -194,6 +196,21 @@ def rank_candidates(rank, eligible_units, min_rank_rows, plan_rows,
             else:
                 kept.append(u)
         eligible_units = kept
+
+    # 选科硬过滤·【投档单位级】（山东 3+3：选考要求挂在每个投档专业上 → 真过滤·路线a）。
+    # unit_xk_index: {uid: {"ok":bool, "选科要求":str, "选科标记":str}}；ok=False 直接剔除。
+    # uid 不在 index（未匹配到官方选考条目）→ 保留并由下方标"待核对"，绝不臆造资格。
+    _excluded_units = 0
+    if unit_xk_index:
+        kept = []
+        for u in eligible_units:
+            v = unit_xk_index.get(u["投档单位id"])
+            if v is not None and v.get("ok") is False:
+                _excluded_units += 1
+            else:
+                kept.append(u)
+        eligible_units = kept
+
     eligible_map = {u["投档单位id"]: u for u in eligible_units}
     agg = aggregate_units(min_rank_rows)
     stable_ids = {uid for uid, info in agg.items() if info["样本年数"] >= 2}
@@ -210,7 +227,16 @@ def rank_candidates(rank, eligible_units, min_rank_rows, plan_rows,
             continue
         cand = dict(info)
         cand["分档"] = gear
-        if school_xk_index is not None:
+        if unit_xk_index is not None:
+            # 山东：投档单位级真选科。匹配到官方条目→精确要求+✅；未匹配→诚实"待核对"+❓
+            v = unit_xk_index.get(uid)
+            if v:
+                cand["选科要求"] = v.get("选科要求", "")
+                cand["选科标记"] = v.get("选科标记", "")
+            else:
+                cand["选科要求"] = "选考要求待核对(未匹配到官方选考公告条目，以官方目录为准)"
+                cand["选科标记"] = "[选科❓待核对]"
+        elif school_xk_index is not None:
             import subject_advice
             text, _ = subject_advice.annotate_for_school(
                 school_xk_index, uid.split("-")[0])
@@ -224,20 +250,35 @@ def rank_candidates(rank, eligible_units, min_rank_rows, plan_rows,
         cand["招生计划提示"] = hints.get(uid, "")
         cand["院校趋势"] = trends.get(uid.split("-")[0], "")  # 院校级近3年大小年/冷热
         if gear == "冲":
-            grain_note = "组内" if "组" in unit_grain else "校内"
-            cand["调剂提示"] = (
-                f"冲档：若该{unit_grain}{grain_note}不服从调剂，有退档风险；"
-                f"勾选服从前先确认组内是否有完全不能接受的专业"
-            )
+            if "专业" in volunteer_mode and "组" not in volunteer_mode:
+                # 专业(类)平行志愿（山东/浙江）：1个志愿=1个专业(类)，投档即按该专业(类)录取，
+                # 无校内专业调剂、不会因"不服从校级调剂"退档；冲档主要风险点不同。
+                cand["调剂提示"] = (
+                    "冲档：山东专业平行志愿，投档到该专业(类)即按它录取，无校内调剂；"
+                    "主要风险是不满足该专业的【选考科目/单科成绩/身体条件】要求被退档，"
+                    "或按大类录取后入学再分流——填前务必核对该专业的选科与单科要求"
+                )
+            else:
+                # 院校专业组（广东/湖北…）：投档到组后组内调剂，不服从有退档风险。
+                grain_note = "组内" if "组" in unit_grain else "校内"
+                cand["调剂提示"] = (
+                    f"冲档：若该{unit_grain}{grain_note}不服从调剂，有退档风险；"
+                    f"勾选服从前先确认组内是否有完全不能接受的专业"
+                )
         buckets[gear].append(cand)
 
     for gear in buckets:
         buckets[gear].sort(key=lambda c: c["基准位次"])
 
+    if "专业" in volunteer_mode and "组" not in volunteer_mode:
+        _benchmark = "最新可得年投档位次（专业平行志愿·综合位次；多年大小年趋势待后续回填）"
+    else:
+        _benchmark = "最新可得年投档位次（组号年年重组，不跨年均值；院校近3年趋势见提示）"
     return {
         "考生位次": rank,
         "投档单位粒度": unit_grain,
-        "分档基准": "最新可得年投档位次（组号年年重组，不跨年均值；院校近3年趋势见提示）",
+        "志愿模式": volunteer_mode,
+        "分档基准": _benchmark,
         "冲": buckets["冲"],
         "稳": buckets["稳"],
         "保": buckets["保"],
@@ -248,4 +289,5 @@ def rank_candidates(rank, eligible_units, min_rank_rows, plan_rows,
         # 中外合作办学院校名不同，视为独立院校保留）。
         "选科剔除整校数": len(_excluded_schools),
         "选科剔除整校样例": _excluded_schools[:10],
+        "选科剔除单位数": _excluded_units,   # 山东：投档单位级真过滤剔除数
     }

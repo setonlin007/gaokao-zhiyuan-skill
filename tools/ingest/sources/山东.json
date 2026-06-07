@@ -1,0 +1,34 @@
+{
+  "省份": "山东",
+  "_说明": "真实形态(2026-06-07 实地核验)。山东=3+3综合位次，无物理类/历史类；投档单位=专业(类)，投档表一份给齐计划数+最低位次(只给位次不给分)。两数据集均为旧版.xls(OLE2，需xlrd)，sdzk.cn 官方域 --noproxy -k 直连可达。解析见 run_shandong.py（确定性，数字不经LLM）。",
+  "datasets": [
+    {
+      "dataset": "一分一段表",
+      "year": 2025,
+      "format": "xls",
+      "publisher": "山东省教育招生考试院",
+      "primary_url": "https://www.sdzk.cn/Floadup/file/20250625/6388646133710894671069456.xls",
+      "公告页URL": "https://www.sdzk.cn/NewsInfo.aspx?NewsID=6943",
+      "sheet_index": 0,
+      "skip_rows": 3,
+      "column_map": { "分数": 0, "本段人数": 1, "累计人数": 2 },
+      "_column_map说明": "col0=分数；col1/2=【全体(综合)】本段/累计 —— 山东3+3用综合位次投档，故只取全体两列；col3+为各选考科目分布(本省投档不用，按需可另存)。",
+      "const_cols": { "科类": "综合" },
+      "discovery": { "query": "山东 2025 夏季高考 文化成绩 一分一段表 sdzk.cn", "allow_domains": ["sdzk.cn"] }
+    },
+    {
+      "dataset": "投档单位最低位次+招生计划",
+      "year": 2025,
+      "format": "xls",
+      "publisher": "山东省教育招生考试院",
+      "primary_url": "https://www.sdzk.cn/Floadup/file/20250719/6388855130412530367357143.xls",
+      "公告页URL": "https://www.sdzk.cn/NewsInfo.aspx?NewsID=6996",
+      "sheet_index": 0,
+      "skip_rows": 2,
+      "column_map": { "专业代号及名称": 0, "院校代号及名称": 1, "投档计划数": 2, "最低位次": 3 },
+      "_拆分规则": "专业代号及名称→正则 ^([0-9A-Za-z]+)(.+)$ 得 专业代号+专业名；院校代号及名称→ ^([A-Z]\\d{3,4})(.+)$ 得 山东院校代号(A001…Y030，非国标码)+院校名。投档单位id=院校代号-专业代号。最低分山东不公布→留空。",
+      "const_cols": { "科类": "综合" },
+      "discovery": { "query": "山东 2025 普通类常规批 第1次志愿 投档情况表 sdzk.cn", "allow_domains": ["sdzk.cn"] }
+    }
+  ]
+}

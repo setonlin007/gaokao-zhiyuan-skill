@@ -52,14 +52,21 @@ def main():
         ap.error("请至少给 --分数 或 --位次")
 
     first, optional, xk_disp = parse_xuanke(a.选科)
-    kelei = "物理类" if first == "物理" else "历史类"
     prov_dir = os.path.join(SKILL, "data", "provinces", a.省份)
     if not os.path.isdir(prov_dir):
-        print(f"暂未建库的省份：{a.省份}（当前已覆盖：广东）"); sys.exit(1)
+        print(f"暂未建库的省份：{a.省份}（当前已覆盖：广东、山东）"); sys.exit(1)
 
     # P0 阶段
     tl = data_loader.load_timeline(prov_dir)
     st = stage_mod.detect_stage(tl, date.fromisoformat(a.今天))
+
+    # 科类由该省【科类体系】决定（铁律四：模式因省而异，不写死）：
+    #   3+1+2（广东/湖北…）→ 按首选分 物理类/历史类，投档与一分一段都分轨；
+    #   3+3（山东/浙江/沪）→ 全省【综合】一个位次序列，不分物理/历史；选科只用于资格过滤，不分轨。
+    if tl.get("科类体系") == "3+3":
+        kelei = "综合"
+    else:
+        kelei = "物理类" if first == "物理" else "历史类"
 
     # 位次。一分一段【按年份】，分数→位次只在【同一年】成立；据出分阶段区分"真实/估算"。
     rank_caveat = ""
@@ -103,21 +110,51 @@ def main():
             eligible.append({"投档单位id": uid, "院校名": r["院校名"], "专业组代码": r["专业组代码"],
                              "城市": si["城市"], "办学性质": si["办学性质"]})
 
-    # 选科要求（官方选考系统全量数据，院校×专业类级）。
-    # 数据天花板：只到【院校×专业类】，无 专业组→专业类 映射 → 做不到组级硬过滤；
-    # 退一步做【次优级】：① 整校本轨无资格 → hard-exclude；② 逐组候选附院校级精确资格附注。
-    xk_rows = subject_advice.load(os.path.join(prov_dir, "选科要求_专业类.csv"))
-    warn = subject_advice.ineligible_summary(xk_rows, first, optional) if xk_rows else None
-    school_idx = (subject_advice.build_school_index(xk_rows, first, optional, kelei=kelei)
-                  if xk_rows else None)
+    # ── 选科要求：按省志愿模式走不同路线 ──────────────────────────────
+    import subject_filter
+    科类体系 = tl.get("科类体系")
+    unit_xk_index = None      # 山东：投档单位级真选科
+    school_idx = None         # 广东：院校×专业类级
+    warn = None
+    sd_match_n = sd_total = 0
+    if 科类体系 == "3+3":
+        # 山东(3+3)：选考要求.csv = 官方《选考科目要求公告》join 投档单位(院校名+基础专业名，89%覆盖)。
+        # 投档单位级真过滤(路线a)：无资格→hard-exclude；未匹配到官方条目→诚实标"待核对"，绝不臆造资格。
+        student_subjects = set(s.strip().replace("思想政治", "政治")
+                               for s in xk_disp.replace("、", ",").split(",") if s.strip())
+        sd_xk_rows = data_loader.load_subject_requirements(prov_dir, kelei=None)
+        unit_xk_index = {}
+        for r in sd_xk_rows:
+            uid = r.get("投档单位id")
+            if not uid:
+                continue
+            rtype = r.get("要求类型", "不限")
+            rsubj = [s for s in (r.get("要求科目", "") or "").split(",") if s]
+            ok, reason = subject_filter.sd_match(rtype, rsubj, student_subjects)
+            raw = r.get("选考要求原文", "")
+            if ok:
+                unit_xk_index[uid] = {"ok": True, "选科要求": f"✅ {raw}（你已满足）",
+                                      "选科标记": "[选科✅有资格]"}
+            else:
+                unit_xk_index[uid] = {"ok": False, "选科要求": f"❌ {raw}：{reason}",
+                                      "选科标记": "[选科❌无资格]"}
+        sd_total = len(eligible)
+        sd_match_n = sum(1 for u in eligible if u["投档单位id"] in unit_xk_index)
+    else:
+        # 广东(3+1+2)：官方选考系统数据，院校×专业类级（次优级：整校无资格 hard-exclude + 逐校附注）。
+        xk_rows = subject_advice.load(os.path.join(prov_dir, "选科要求_专业类.csv"))
+        warn = subject_advice.ineligible_summary(xk_rows, first, optional) if xk_rows else None
+        school_idx = (subject_advice.build_school_index(xk_rows, first, optional, kelei=kelei)
+                      if xk_rows else None)
 
     city_pref = set(x.strip() for x in a.城市.replace("、", ",").split(",") if x.strip()) or None
     result = chongwenbao.rank_candidates(
         rk, eligible, min_ranks, plans,
         volunteer_slots=tl.get("可填志愿数", {}).get("本科批"),
         unit_grain=tl.get("投档单位粒度", "院校专业组"),
+        volunteer_mode=tl.get("志愿模式", "院校专业组"),
         city_pref=city_pref, accept_minban=(False if a.不要民办 else None),
-        school_xk_index=school_idx)
+        school_xk_index=school_idx, unit_xk_index=unit_xk_index)
 
     # 双一流学科标注（Q2看校数据，给候选加"王牌学科"信息）
     import discipline_info
@@ -127,13 +164,19 @@ def main():
             syl = discipline_info.shuangyiliu(dinfo, c["院校名"])
             c["双一流学科"] = "、".join(syl) if syl else ""
 
-    # 选科已校验=False：组级硬过滤仍未达成（数据天花板），诚实保留"组代码级需官方目录"声明。
-    # 选科附注级别='院校×专业类'：已对每个候选附院校级精确资格，且整校无资格的已 hard-exclude。
     meta = {"省份": a.省份, "科类": kelei, "输入说明": in_desc,
-            "考生选科": xk_disp, "选科已校验": False, "选科预警": warn,
-            "选科附注级别": "院校×专业类" if school_idx else None,
+            "考生选科": xk_disp, "选科预警": warn,
             "选科剔除整校数": result.get("选科剔除整校数", 0),
             "选科剔除整校样例": result.get("选科剔除整校样例", [])}
+    if 科类体系 == "3+3":
+        # 山东：投档单位级真过滤（matched 真过滤、剔除无资格；未匹配标待核对，已诚实标注）
+        meta.update({"选科模式": "山东投档单位级", "选科已校验": True,
+                     "选科剔除单位数": result.get("选科剔除单位数", 0),
+                     "选科真匹配数": sd_match_n, "选科总单位数": sd_total})
+    else:
+        # 广东：选科已校验=False（组代码级硬过滤未达成，诚实保留"需官方目录"声明）
+        meta.update({"选科已校验": False,
+                     "选科附注级别": "院校×专业类" if school_idx else None})
 
     # 详细版（完整表格、全部候选、每条来源）写到 output/；控制台只打印总结版
     out_dir = os.path.join(SKILL, "output")

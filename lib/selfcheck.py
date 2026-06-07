@@ -173,6 +173,122 @@ print("\n----- 渲染答案预览 -----\n")
 print(answer)
 
 # ──────────────────────────────────────────────────────────────
+# 测试7：山东"专业(类)平行志愿 · 3+3 综合位次"模式（与院校专业组模式区分）
+# ──────────────────────────────────────────────────────────────
+section("测试7 · 山东专业平行志愿 + 3+3综合位次（模式差异，DESIGN §4/铁律四）")
+SD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_selfcheck_data", "山东")
+sd_tl = data_loader.load_timeline(SD_DIR)
+check("山东科类体系=3+3", sd_tl.get("科类体系"), "3+3")
+check("山东投档单位粒度=专业(类)", sd_tl.get("投档单位粒度"), "专业(类)")
+check("山东可填志愿数=96", sd_tl["可填志愿数"]["本科批"], 96)
+
+sd_stage = stage.detect_stage(sd_tl, date(2026, 7, 6))
+check("山东填报期阶段", sd_stage.phase, stage.POST_FILLING)
+check("山东填报期 active 截止", sd_stage.active_batch["填报end"], "2026-07-07")
+
+# 3+3：科类用【综合】，一分一段不分物理/历史
+sd_yf = data_loader.load_yifenyiduan(SD_DIR, "综合", year=2026)
+sd_table, sd_desc = rank.build_score_to_rank(sd_yf)
+sd_rank = rank.score_to_rank(600, sd_table, sd_desc)
+check("山东600分→综合位次10000", sd_rank, 10000)
+
+sd_min = data_loader.load_min_ranks(SD_DIR, kelei="综合")
+sd_plans = data_loader.load_plans(SD_DIR, kelei="综合")
+# 仿 answer_q1 建候选池（最新年全部投档单位；山东无 per-专业选科文件→不做选科硬过滤）
+sd_latest = max(r["year"] for r in sd_min)
+sd_eligible, seen = [], set()
+for r in sd_min:
+    uid = r["投档单位id"]
+    if r["year"] == sd_latest and uid not in seen:
+        seen.add(uid)
+        sd_eligible.append({"投档单位id": uid, "院校名": r["院校名"],
+                            "专业组代码": r["专业组代码"], "专业名": r.get("专业名", "")})
+# 选科真过滤（3+3·投档单位级）：构建 unit_xk_index（同 answer_q1 山东分支逻辑）
+sd_xk_raw = data_loader.load_subject_requirements(SD_DIR, kelei=None)
+
+
+def build_unit_xk(student_subjects):
+    idx = {}
+    for r in sd_xk_raw:
+        uid = r.get("投档单位id")
+        if not uid:
+            continue
+        rtype = r.get("要求类型", "不限")
+        rsubj = [s for s in (r.get("要求科目", "") or "").split(",") if s]
+        ok, reason = subject_filter.sd_match(rtype, rsubj, student_subjects)
+        idx[uid] = {"ok": ok, "选科要求": ("✅" if ok else "❌"),
+                    "选科标记": "[选科✅有资格]" if ok else "[选科❌无资格]"}
+    return idx
+
+
+# 考生甲：物理+化学+生物（满足 S001-01 的"物理,化学均须"）
+xk_jia = build_unit_xk({"物理", "化学", "生物"})
+sd_res = chongwenbao.rank_candidates(
+    sd_rank, sd_eligible, sd_min, sd_plans,
+    volunteer_slots=sd_tl["可填志愿数"]["本科批"],
+    unit_grain=sd_tl["投档单位粒度"],
+    volunteer_mode=sd_tl["志愿模式"],
+    unit_xk_index=xk_jia,
+)
+
+
+def sd_ids(gear):
+    return sorted(c["投档单位id"] for c in sd_res[gear])
+
+
+print(f"  考生综合位次 {sd_rank}，粒度 {sd_res['投档单位粒度']}，模式 {sd_res['志愿模式']}")
+print(f"  冲 {sd_ids('冲')} | 稳 {sd_ids('稳')} | 保 {sd_ids('保')}（选科剔除 {sd_res['选科剔除单位数']}）")
+check("山东 冲档(位次8500,比值-0.15)", sd_ids("冲"), ["S001-01"])
+check("山东 稳档(位次9500,比值-0.05)", sd_ids("稳"), ["S001-21"])
+check("山东 保档(位次11000/12000/12500)", sd_ids("保"), ["S002-E1", "S005-01", "S006-01"])
+sd_all = sd_ids("冲") + sd_ids("稳") + sd_ids("保")
+check("山东 S004(位次7000,差太多)不列", "S004-01" not in sd_all, True)
+# 选科：甲满足物理化学→S001-01保留且✅；S005-01不在选考库→❓待核对；S006-01任选化生→满足✅；剔除0
+check("甲 选科剔除单位数=0", sd_res["选科剔除单位数"], 0)
+s001 = next(c for c in sd_res["冲"] if c["投档单位id"] == "S001-01")
+check("甲 S001-01 选科✅有资格", s001["选科标记"], "[选科✅有资格]")
+s005 = next(c for c in sd_res["保"] if c["投档单位id"] == "S005-01")
+check("S005-01 未匹配官方选考→❓待核对", s005["选科标记"], "[选科❓待核对]")
+s006 = next(c for c in sd_res["保"] if c["投档单位id"] == "S006-01")
+check("甲 S006-01 任选(化学/生物)满足→✅", s006["选科标记"], "[选科✅有资格]")
+# 任选语义单测：考生有其一即可；都没有则不通过
+check("任选 化生·考生有生物→通过", subject_filter.sd_match("任选", ["化学", "生物"], {"物理", "生物", "政治"})[0], True)
+check("任选 化生·考生都没有→不通过", subject_filter.sd_match("任选", ["化学", "生物"], {"历史", "政治", "地理"})[0], False)
+
+# 考生乙：历史+政治+地理（无物理化学）→ S001-01(物化均须)、S006-01(任选化生) 都应 hard-exclude
+xk_yi = build_unit_xk({"历史", "政治", "地理"})
+sd_res_yi = chongwenbao.rank_candidates(
+    sd_rank, sd_eligible, sd_min, sd_plans,
+    volunteer_slots=sd_tl["可填志愿数"]["本科批"],
+    unit_grain=sd_tl["投档单位粒度"], volunteer_mode=sd_tl["志愿模式"],
+    unit_xk_index=xk_yi)
+yi_all = [c["投档单位id"] for g in ("冲", "稳", "保") for c in sd_res_yi[g]]
+check("乙(无物化) S001-01 被选科hard-exclude", "S001-01" not in yi_all, True)
+check("乙(无化生) S006-01(任选化生) 被hard-exclude", "S006-01" not in yi_all, True)
+# 乙无物理也无化生 → 剔 S001-01(均须物化)+S004-01(均须物理)+S006-01(任选化生)=3
+check("乙 选科剔除单位数=3(均须物化+均须物理+任选化生)", sd_res_yi["选科剔除单位数"], 3)
+
+# 模式专属：投档单位带专业名；调剂提示=山东口径(无校内调剂)；分档基准=综合位次
+sd_chong = sd_res["冲"][0]
+check("山东候选带专业名", sd_chong.get("专业名"), "计算机类")
+check("山东冲档调剂提示=专业平行口径(无校内调剂)", "无校内调剂" in sd_chong["调剂提示"], True)
+check("山东分档基准=专业平行综合位次", "专业平行" in sd_res["分档基准"], True)
+
+# 端到端渲染：投档单位显示『院校·专业名』，科类=综合
+sd_meta = {"省份": "山东", "科类": "综合",
+           "输入说明": "600分（综合位次）", "考生选科": "物理、化学、生物",
+           "选科模式": "山东投档单位级", "选科已校验": True,
+           "选科剔除单位数": sd_res["选科剔除单位数"],
+           "选科真匹配数": sum(1 for u in sd_eligible if u["投档单位id"] in xk_jia),
+           "选科总单位数": len(sd_eligible)}
+sd_answer = render.render_q1(sd_stage, sd_res, sd_meta)
+check("山东答案显示 院校·专业名", "山东大学·计算机类" in sd_answer, True)
+check("山东答案标科类=综合(非物理类/历史类分轨)", "**科类**：综合" in sd_answer, True)
+check("山东答案表头未按物理/历史分轨", "**科类**：物理类" not in sd_answer and "**科类**：历史类" not in sd_answer, True)
+check("山东答案含选科真过滤说明", "选科真过滤" in sd_answer or "投档单位级真过滤" in sd_answer, True)
+check("山东答案含免责尾巴", "不构成填报建议或录取承诺" in sd_answer, True)
+
+# ──────────────────────────────────────────────────────────────
 section("自测结论")
 if _failures:
     print(f"{FAIL} 失败 {len(_failures)} 项：{_failures}")

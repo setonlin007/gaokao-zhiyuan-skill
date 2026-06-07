@@ -65,6 +65,29 @@ def describe(unit_req):
     return "，".join(parts)
 
 
+def sd_match(req_type, req_subjects, student_subjects):
+    """山东 3+3 选考匹配（无首选/再选之分，考生从6科任选3科）。
+
+    req_type: '不限' / '均须'(列出科目须全选) / '任选'(列出科目选其一即可)；
+    req_subjects: 该投档单位要求科目 set/list（已规范，如 {'物理','化学'}）；
+    student_subjects: 考生所选 3 科 set（含物理/历史等，均作普通选考科目）。
+    返回 (bool 是否有资格, str 原因)。
+    """
+    chosen = set(student_subjects)
+    need = set(req_subjects or [])
+    if req_type == "不限" or not need:
+        return True, ""
+    if req_type == "任选":
+        if chosen & need:
+            return True, ""
+        return False, f"需选考{'或'.join(sorted(need))}之一（你选了{'、'.join(sorted(chosen))}）"
+    # 均须（默认对"必选某科"也按全须处理）
+    missing = [s for s in need if s not in chosen]
+    if missing:
+        return False, f"须选考{'+'.join(sorted(need))}（缺{'、'.join(missing)}）"
+    return True, ""
+
+
 def filter_eligible(subject_rows, student_first, student_optional):
     """对全部投档单位做选科过滤。
 
